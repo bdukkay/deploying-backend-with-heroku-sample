@@ -1,17 +1,64 @@
-const express = require('express'); // import express module (simplifies routing/requests, among other things)
-const app = express(); // create an instance of the express module (app is the conventional variable name used)
-const fetch = require('node-fetch'); // import node-fetch (enables the fetch API to be used server-side)
-const PORT = process.env.PORT || 5000; // use either the host env var port (PORT) provided by Heroku or the local port (5000) on your machine
+const express = require("express");
+const bodyParser = require("body-parser");
+const fs = require("fs");
+const errors = require("./structs/errors");
+const { v4: uuidv4 } = require("uuid");
+const { ApiException } = errors;
+const version = "1.0.0";
+const URL_LOGGING = true;
 
-app.get('/', (req, res) => { // send a get request to root directory ('/' is this file (app.js))
-  fetch('https://www.boredapi.com/api/activity') // fetch activity from bored API - https://www.boredapi.com/about
-    .then(res => res.json()) // return a promise containing the response
-    .then(json => res.send(`<h1>Today's Activity: ${json.activity}!</h1>`)) // extract the JSON body content from the response (specifically the activity value) and sends it to the client
-    .catch(function(err){ // catch any errors
-      console.log(err); // log errors to the console
-    })
-})
+(function () {
+	"use strict";
+	
+	String.prototype.format = function () {
+		const args = arguments[0] instanceof Array ? arguments[0] : arguments;
+		return this.replace(/{(\d+)}/g, function (match, number) {
+			return typeof args[number] != "undefined" ? args[number] : match;
+		});
+	};
+	
+	const app = express();
+	
+	app.set('port', process.env.PORT || 80);
+	app.use(bodyParser.urlencoded({ extended: false }));
+	app.use(bodyParser.json());
+	app.set("etag", false);
 
-app.listen(PORT, () => { // start server and listen on specified port
-  console.log(`App is running on ${PORT}`) // confirm server is running and log port to the console
-}) 
+	if (URL_LOGGING)
+		app.use((req, res, next) => {
+			if (!req.url.endsWith('VerifyRealMoneyPurchase?profileId=common_core&rvn=1') && !req.url.endsWith('fortnite/api/game/v2/profile/23c82a1c6e68452b964b3f0a6f1f3400/client/VerifyRealMoneyPurchase?profileId=common_core&rvn=2')){
+				console.log(req.url)
+			}
+			next()
+		})
+
+	app.use("/", express.static("public"));
+
+	fs.readdirSync(`${__dirname}/managers`).forEach(route => {
+		require(`${__dirname}/managers/${route}`)(app, process.env.PORT || 80);
+	})
+
+	app.use((req, res, next) => {
+		next(new ApiException(errors.com.epicgames.common.not_found));
+	})
+
+	app.use((err, req, res, next) => {
+		let error = null;
+
+		if (err instanceof ApiException) {
+			error = err;
+		} else {
+			const trackingId = req.headers["x-epic-correlation-id"] || uuidv4();
+			error = new ApiException(errors.com.epicgames.common.server_error).with(trackingId);
+			console.error(trackingId, err);
+		}
+
+		error.apply(res);
+	});
+
+	app.listen(process.env.PORT || 80, () => {
+		console.log(`StormFN v${version} is listening on port ${80}!`);
+	});
+
+	module.exports = app;
+}());
